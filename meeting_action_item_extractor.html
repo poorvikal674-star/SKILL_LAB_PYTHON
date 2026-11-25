@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Action Item Extractor</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: #f3f6fb;
+    color: #1f2937; font-family: Arial, sans-serif;
+  }
+  .container {
+    max-width: 900px; margin: auto; background: white;
+    padding: 28px; border-radius: 16px;
+    box-shadow: 0 8px 28px rgba(20, 35, 60, .09);
+  }
+  h1 { margin: 0 0 8px; color: #183b68; }
+  .intro { color: #64748b; margin: 0 0 24px; line-height: 1.5; }
+  label { display: block; font-weight: 700; margin: 18px 0 8px; }
+  textarea {
+    width: 100%; min-height: 230px; resize: vertical;
+    padding: 14px; border: 1px solid #cbd5e1; border-radius: 9px;
+    font: 14px/1.5 Arial, sans-serif;
+  }
+  select, button {
+    padding: 11px 14px; border-radius: 8px; font-size: 14px;
+  }
+  select { border: 1px solid #cbd5e1; background: white; }
+  button {
+    border: 0; background: #2563eb; color: white; font-weight: 700;
+    cursor: pointer; margin-left: 8px;
+  }
+  button:hover { background: #1d4ed8; }
+  .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .controls label { margin: 0; }
+  #status { color: #b45309; margin-top: 14px; }
+  #results { margin-top: 22px; }
+  .action {
+    border: 1px solid #dbe4f0; border-left: 4px solid #2563eb;
+    border-radius: 9px; padding: 14px 16px; margin: 12px 0;
+    background: #fbfdff;
+  }
+  .action h3 { margin: 0 0 10px; font-size: 16px; }
+  .meta { color: #475569; font-size: 14px; margin: 5px 0; }
+  .empty { padding: 16px; background: #f8fafc; border-radius: 8px; color: #64748b; }
+  .note { font-size: 13px; color: #64748b; margin-top: 22px; line-height: 1.5; }
+  @media (max-width: 600px) {
+    .container { padding: 20px; }
+    .controls { align-items: stretch; flex-direction: column; }
+    .controls button { margin: 0; }
+  }
+</style>
+</head>
+<body>
+<main class="container">
+  <h1>Meeting Action Item Extractor</h1>
+  <p class="intro">Paste meeting notes below. The app identifies possible tasks, their owners, and deadlines.</p>
+
+  <label for="notes">Meeting Notes</label>
+  <textarea id="notes">Website revamp kickoff
+Alex: What are the main features you want on the new landing page?
+Client: We need a modern hero section, customer testimonials, and an integrated booking calendar.
+Alex: Would you prefer Calendly integration or a custom-built solution?
+Client: Calendly works fine and keeps it simple.
+Alex: Perfect, I'll prepare the initial wireframes by Wednesday.
+Sarah: I will create the landing page design by Friday.
+John: We need to review the customer testimonials before Monday.
+Alex: I will schedule a meeting with the design team next week.
+Client: Please finalize the booking calendar integration by Thursday.
+Sarah: I will send the updated project document tomorrow.</textarea>
+
+  <label for="mode">Extraction Mode</label>
+  <div class="controls">
+    <select id="mode">
+      <option value="offline">Offline (runs in this browser)</option>
+      <option value="gemini">Gemini AI (requires a backend)</option>
+    </select>
+    <button id="extract">Extract Action Items</button>
+  </div>
+  <div id="status" role="status"></div>
+  <section id="results" aria-live="polite"></section>
+  <p class="note">Note: Offline extraction uses action-word matching, so review the results. Gemini mode is shown as an option, but it needs a separate secure server-side integration; an API key should not be placed in this HTML file.</p>
+</main>
+
+<script>
+const ACTION_WORDS = [
+  "prepare", "create", "develop", "design", "complete", "submit",
+  "review", "send", "update", "schedule", "arrange", "finalize",
+  "deliver", "implement", "coordinate", "investigate", "confirm",
+  "follow up", "discuss", "share", "build", "test", "launch",
+  "organize", "check", "approve", "verify", "provide", "contact",
+  "analyze", "resolve", "plan", "document", "draft", "present",
+  "upload", "publish", "assign", "monitor", "ensure", "establish",
+  "collect", "research", "respond", "notify", "book", "integrate"
+];
+
+function escapeHTML(value) {
+  return value.replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[ch]);
+}
+
+function offlineExtract(notes) {
+  const actions = [];
+  const actionPattern = ACTION_WORDS
+    .slice().sort((a, b) => b.length - a.length)
+    .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+
+  for (const rawLine of notes.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const speakerMatch = line.match(/^([^:\n]+):\s*(.+)$/);
+    if (!speakerMatch) continue;
+
+    const owner = speakerMatch[1].trim();
+    const sentence = speakerMatch[2].trim();
+    const actionMatch = sentence.match(new RegExp("\\b(" + actionPattern + ")\\b", "i"));
+    if (!actionMatch) continue;
+
+    const deadlineMatch = sentence.match(/\b(?:by|before|on|due|within)\s+([^,.!?]+)/i);
+    actions.push({
+      owner,
+      task: sentence,
+      deadline: deadlineMatch ? deadlineMatch[1].trim() : "Not specified"
+    });
+  }
+  return actions;
+}
+
+document.getElementById("extract").addEventListener("click", () => {
+  const notes = document.getElementById("notes").value.trim();
+  const mode = document.getElementById("mode").value;
+  const status = document.getElementById("status");
+  const results = document.getElementById("results");
+  results.innerHTML = "";
+  status.textContent = "";
+
+  if (!notes) {
+    status.textContent = "Please enter meeting notes first.";
+    return;
+  }
+  if (mode === "gemini") {
+    status.textContent = "Gemini mode needs a backend server to call the Gemini API securely. Please use Offline mode in this HTML version.";
+    return;
+  }
+
+  const actions = offlineExtract(notes);
+  if (actions.length === 0) {
+    results.innerHTML = '<div class="empty">No action items found.</div>';
+    return;
+  }
+
+  const heading = document.createElement("h2");
+  heading.textContent = "Extracted Action Items";
+  results.appendChild(heading);
+
+  actions.forEach((action, index) => {
+    const card = document.createElement("article");
+    card.className = "action";
+    card.innerHTML = `
+      <h3>${index + 1}. ${escapeHTML(action.task)}</h3>
+      <p class="meta"><strong>Owner:</strong> ${escapeHTML(action.owner)}</p>
+      <p class="meta"><strong>Deadline:</strong> ${escapeHTML(action.deadline)}</p>`;
+    results.appendChild(card);
+  });
+
+  const reminder = document.createElement("p");
+  reminder.className = "note";
+  reminder.textContent = "Please review all extracted action items. This simple offline version uses keyword matching and may miss some tasks or identify extra ones.";
+  results.appendChild(reminder);
+});
+</script>
+</body>
+</html>
